@@ -4,12 +4,12 @@
 package proxy
 
 import (
+	"google.golang.org/grpc/status"
 	"io"
 
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/transport"
 )
 
 var (
@@ -60,11 +60,10 @@ type handler struct {
 // forwarding it to a ClientStream established against the relevant ClientConn.
 func (s *handler) handler(srv interface{}, serverStream grpc.ServerStream) error {
 	// little bit of gRPC internals never hurt anyone
-	lowLevelServerStream, ok := transport.StreamFromContext(serverStream.Context())
+	fullMethodName, ok := grpc.Method(serverStream.Context())
 	if !ok {
-		return grpc.Errorf(codes.Internal, "lowLevelServerStream not exists in context")
+		return status.Errorf(codes.Internal, "lowLevelServerStream not exists in context")
 	}
-	fullMethodName := lowLevelServerStream.Method()
 	// We require that the director's returned context inherits from the serverStream.Context().
 	outgoingCtx, backendConn, err := s.director(serverStream.Context(), fullMethodName)
 	clientCtx, clientCancel := context.WithCancel(outgoingCtx)

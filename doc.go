@@ -12,4 +12,4 @@ to implement whatever logic of backend-picking, dialing and service verification
 
 See examples on documented functions.
 */
-package proxy
+package grpc_proxy

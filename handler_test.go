@@ -1,10 +1,9 @@
 // Copyright 2017 Michal Witkowski. All Rights Reserved.
 // See LICENSE for licensing terms.
 
-package proxy_test
+package grpc_proxy
 
 import (
-	"github.com/ostronom/grpc-proxy/proxy"
 	"io"
 	"log"
 	"net"
@@ -202,7 +201,7 @@ func (s *ProxyHappySuite) SetupSuite() {
 	pb.RegisterTestServiceServer(s.server, &assertingService{t: s.T()})
 
 	// Setup of the proxy's Director.
-	codec := grpc.WithDefaultCallOptions(grpc.CallCustomCodec(proxy.Codec()))
+	codec := grpc.WithDefaultCallOptions(grpc.CallCustomCodec(Codec()))
 	s.serverClientConn, err = grpc.Dial(s.serverListener.Addr().String(), grpc.WithInsecure(), codec)
 	require.NoError(s.T(), err, "must not error on deferred client Dial")
 	director := func(ctx context.Context, fullName string) (context.Context, *grpc.ClientConn, error) {
@@ -218,11 +217,11 @@ func (s *ProxyHappySuite) SetupSuite() {
 		return outCtx, s.serverClientConn, nil
 	}
 	s.proxy = grpc.NewServer(
-		grpc.CustomCodec(proxy.Codec()),
-		grpc.UnknownServiceHandler(proxy.TransparentHandler(director)),
+		grpc.CustomCodec(Codec()),
+		grpc.UnknownServiceHandler(TransparentHandler(director)),
 	)
 	// Ping handler is handled as an explicit registration and not as a TransparentHandler.
-	proxy.RegisterService(s.proxy, director,
+	RegisterService(s.proxy, director,
 		"mwitkow.testproto.TestService",
 		"Ping")
 

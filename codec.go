@@ -1,4 +1,4 @@
-package proxy
+package grpc_proxy
 
 import (
 	"fmt"

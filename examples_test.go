@@ -29,7 +29,7 @@ func ExampleRegisterService() {
 func ExampleTransparentHandler() {
 	grpc.NewServer(
 		grpc.CustomCodec(Codec()),
-		grpc.UnknownServiceHandler(TransparentHandler(director)))
+		grpc.UnknownServiceHandler(TransparentHandler(director, identityHandler)))
 }
 
 // Provide sa simple example of a director that shields internal services and dials a staging or production backend.

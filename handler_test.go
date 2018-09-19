@@ -218,7 +218,7 @@ func (s *ProxyHappySuite) SetupSuite() {
 	}
 	s.proxy = grpc.NewServer(
 		grpc.CustomCodec(Codec()),
-		grpc.UnknownServiceHandler(TransparentHandler(director)),
+		grpc.UnknownServiceHandler(TransparentHandler(director, identityHandler)),
 	)
 	// Ping handler is handled as an explicit registration and not as a TransparentHandler.
 	RegisterService(s.proxy, director,

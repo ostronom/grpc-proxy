@@ -19,19 +19,12 @@ var (
 	}
 )
 
-// ErrorHandler is used to map over errors returned by proxied methods/director calls
-type ErrorHandler func(error) error
-
-func identityHandler(err error) error {
-	return err
-}
-
 // RegisterService sets up a proxy handler for a particular gRPC service and method.
 // The behaviour is the same as if you were registering a handler method, e.g. from a codegenerated pb.go file.
 //
 // This can *only* be used if the `server` also uses grpcproxy.CodecForServer() ServerOption.
 func RegisterService(server *grpc.Server, director StreamDirector, serviceName string, methodNames ...string) {
-	streamer := &handler{director: director, errHandler: identityHandler}
+	streamer := &handler{director}
 	fakeDesc := &grpc.ServiceDesc{
 		ServiceName: serviceName,
 		HandlerType: (*interface{})(nil),
@@ -53,14 +46,13 @@ func RegisterService(server *grpc.Server, director StreamDirector, serviceName s
 // backends. It should be used as a `grpc.UnknownServiceHandler`.
 //
 // This can *only* be used if the `server` also uses grpcproxy.CodecForServer() ServerOption.
-func TransparentHandler(director StreamDirector, errHandler ErrorHandler) grpc.StreamHandler {
-	streamer := &handler{director: director, errHandler: errHandler}
+func TransparentHandler(director StreamDirector) grpc.StreamHandler {
+	streamer := &handler{director}
 	return streamer.handler
 }
 
 type handler struct {
-	director   StreamDirector
-	errHandler ErrorHandler
+	director StreamDirector
 }
 
 // handler is where the real magic of proxying happens.

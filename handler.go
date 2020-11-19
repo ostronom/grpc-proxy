@@ -25,7 +25,7 @@ var (
 //
 // This can *only* be used if the `server` also uses grpcproxy.CodecForServer() ServerOption.
 func RegisterService(server *grpc.Server, director StreamDirector, serviceName string, methodNames ...string) {
-	streamer := &handler{director}
+	streamer := handler{director}
 	fakeDesc := &grpc.ServiceDesc{
 		ServiceName: serviceName,
 		HandlerType: (*interface{})(nil),
@@ -48,7 +48,7 @@ func RegisterService(server *grpc.Server, director StreamDirector, serviceName s
 //
 // This can *only* be used if the `server` also uses grpcproxy.CodecForServer() ServerOption.
 func TransparentHandler(director StreamDirector) grpc.StreamHandler {
-	streamer := &handler{director}
+	streamer := handler{director}
 	return streamer.handler
 }
 
@@ -56,17 +56,21 @@ type handler struct {
 	director StreamDirector
 }
 
+var errImpossible = status.Error(codes.Internal, "gRPC proxying should never reach this stage.")
+var errLowLevelServerStream = status.Error(codes.Internal, "lowLevelServerStream not exists in context")
+
 // handler is where the real magic of proxying happens.
 // It is invoked like any gRPC server stream and uses the gRPC server framing to get and receive bytes from the wire,
 // forwarding it to a ClientStream established against the relevant ClientConn.
-func (s *handler) handler(srv interface{}, serverStream grpc.ServerStream) error {
+func (s handler) handler(_ interface{}, serverStream grpc.ServerStream) error {
 	// little bit of gRPC internals never hurt anyone
-	fullMethodName, ok := grpc.Method(serverStream.Context())
+	ssc := serverStream.Context()
+	fullMethodName, ok := grpc.Method(ssc)
 	if !ok {
-		return status.Errorf(codes.Internal, "lowLevelServerStream not exists in context")
+		return errLowLevelServerStream
 	}
 	// We require that the director's returned context inherits from the serverStream.Context().
-	outgoingCtx, backendConn, err := s.director(serverStream.Context(), fullMethodName)
+	outgoingCtx, backendConn, err := s.director(ssc, fullMethodName)
 	if err != nil {
 		return err
 	}
@@ -79,8 +83,11 @@ func (s *handler) handler(srv interface{}, serverStream grpc.ServerStream) error
 	// Explicitly *do not close* s2cErrChan and c2sErrChan, otherwise the select below will not terminate.
 	// Channels do not have to be closed, it is just a control flow mechanism, see
 	// https://groups.google.com/forum/#!msg/golang-nuts/pZwdYRGxCIk/qpbHxRRPJdUJ
-	s2cErrChan := s.forwardServerToClient(serverStream, clientStream)
-	c2sErrChan := s.forwardClientToServer(clientStream, serverStream)
+	s2cErrChan := make(chan error, 1)
+	c2sErrChan := make(chan error, 1)
+
+	go s.forwardServerToClient(s2cErrChan, serverStream, clientStream)
+	go s.forwardClientToServer(c2sErrChan, clientStream, serverStream)
 	// We don't know which side is going to stop sending first, so we need a select between the two.
 	for i := 0; i < 2; i++ {
 		select {
@@ -95,7 +102,7 @@ func (s *handler) handler(srv interface{}, serverStream grpc.ServerStream) error
 				// to cancel the clientStream to the backend, let all of its goroutines be freed up by the CancelFunc and
 				// exit with an error to the stack
 				clientCancel()
-				return grpc.Errorf(codes.Internal, "failed proxying s2c: %v", s2cErr)
+				return status.Errorf(codes.Internal, "failed proxying s2c: %v", s2cErr)
 			}
 		case c2sErr := <-c2sErrChan:
 			// This happens when the clientStream has nothing else to offer (io.EOF), returned a gRPC error. In those two
@@ -109,55 +116,49 @@ func (s *handler) handler(srv interface{}, serverStream grpc.ServerStream) error
 			return nil
 		}
 	}
-	return grpc.Errorf(codes.Internal, "gRPC proxying should never reach this stage.")
+	return errImpossible
 }
 
-func (s *handler) forwardClientToServer(src grpc.ClientStream, dst grpc.ServerStream) chan error {
-	ret := make(chan error, 1)
-	go func() {
-		f := &frame{}
-		for i := 0; ; i++ {
-			if err := src.RecvMsg(f); err != nil {
-				ret <- err // this can be io.EOF which is happy case
-				break
-			}
-			if i == 0 {
-				// This is a bit of a hack, but client to server headers are only readable after first client msg is
-				// received but must be written to server stream before the first msg is flushed.
-				// This is the only place to do it nicely.
-				md, err := src.Header()
-				if err != nil {
-					ret <- err
-					break
-				}
-				if err := dst.SendHeader(md); err != nil {
-					ret <- err
-					break
-				}
-			}
-			if err := dst.SendMsg(f); err != nil {
+func (s handler) forwardClientToServer(ret chan error, src grpc.ClientStream, dst grpc.ServerStream) {
+	f := &frame{}
+	firstFrame := true
+	for {
+		if err := src.RecvMsg(f); err != nil {
+			ret <- err // this can be io.EOF which is happy case
+			return
+		}
+		if firstFrame {
+			// This is a bit of a hack, but client to server headers are only readable after first client msg is
+			// received but must be written to server stream before the first msg is flushed.
+			// This is the only place to do it nicely.
+			md, err := src.Header()
+			if err != nil {
 				ret <- err
-				break
+				return
+			}
+			if err := dst.SendHeader(md); err != nil {
+				ret <- err
+				return
 			}
 		}
-	}()
-	return ret
+		if err := dst.SendMsg(f); err != nil {
+			ret <- err
+			return
+		}
+		firstFrame = false
+	}
 }
 
-func (s *handler) forwardServerToClient(src grpc.ServerStream, dst grpc.ClientStream) chan error {
-	ret := make(chan error, 1)
-	go func() {
-		f := &frame{}
-		for i := 0; ; i++ {
-			if err := src.RecvMsg(f); err != nil {
-				ret <- err // this can be io.EOF which is happy case
-				break
-			}
-			if err := dst.SendMsg(f); err != nil {
-				ret <- err
-				break
-			}
+func (s handler) forwardServerToClient(ret chan error, src grpc.ServerStream, dst grpc.ClientStream) {
+	f := &frame{}
+	for {
+		if err := src.RecvMsg(f); err != nil {
+			ret <- err // this can be io.EOF which is happy case
+			return
 		}
-	}()
-	return ret
+		if err := dst.SendMsg(f); err != nil {
+			ret <- err
+			return
+		}
+	}
 }

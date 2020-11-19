@@ -2,7 +2,6 @@ package grpc_proxy
 
 import (
 	"fmt"
-
 	"github.com/golang/protobuf/proto"
 	"google.golang.org/grpc"
 )

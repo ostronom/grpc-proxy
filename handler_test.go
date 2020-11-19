@@ -181,12 +181,6 @@ func (s *ProxyHappySuite) TestPingStream_FullDuplexWorks() {
 	assert.Contains(s.T(), trailerMd, serverTrailerMdKey, "PingList trailer headers user contain metadata")
 }
 
-func (s *ProxyHappySuite) TestPingStream_StressTest() {
-	for i := 0; i < 50; i++ {
-		s.TestPingStream_FullDuplexWorks()
-	}
-}
-
 func (s *ProxyHappySuite) SetupSuite() {
 	var err error
 

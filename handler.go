@@ -78,6 +78,7 @@ func (s handler) handler(_ interface{}, serverStream grpc.ServerStream) error {
 	// TODO(mwitkow): Add a `forwarded` header to metadata, https://en.wikipedia.org/wiki/X-Forwarded-For.
 	clientStream, err := grpc.NewClientStream(clientCtx, clientStreamDescForProxying, backendConn, fullMethodName)
 	if err != nil {
+		clientCancel()
 		return err
 	}
 	// Explicitly *do not close* s2cErrChan and c2sErrChan, otherwise the select below will not terminate.
@@ -111,11 +112,14 @@ func (s handler) handler(_ interface{}, serverStream grpc.ServerStream) error {
 			serverStream.SetTrailer(clientStream.Trailer())
 			// c2sErr will contain RPC error from client code. If not io.EOF return the RPC error as server stream error.
 			if c2sErr != io.EOF {
+				clientCancel()
 				return c2sErr
 			}
+			clientCancel()
 			return nil
 		}
 	}
+	clientCancel()
 	return errImpossible
 }
 
